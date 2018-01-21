@@ -12,7 +12,7 @@ template <class T>
 struct alignas(goodAlign) MyStuff {
   unique_ptr<int> non_trivial_dtor;
   char blah;
-  T foo[14];
+  T foo[13];
 };
 
 static_assert(sizeof(MyStuff<int>) <= goodAlign, "Make struct MyStuff smaller");

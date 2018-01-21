@@ -1,4 +1,6 @@
-/* 25 Dec, 2017: Right now, we need --std=c++1z for this to compile. Clang++
+/* 19 Jan, 2018: Check how this all compares with Boost fast pool allocator.
+
+   25 Dec, 2017: Right now, we need --std=c++1z for this to compile. Clang++
    (v4.0.1) fails without it because of constexpr, while g++ (v7.2.0) seems to
    succeed succeeds but silently ignores dynamic memory allocation alignment
    requirements. Actually, g++ just corrupts everything because non-trivial
