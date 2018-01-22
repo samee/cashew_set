@@ -16,6 +16,12 @@ using namespace cashew;
 #include <set>
 #endif
 
+#ifdef BENCH_GNU_MT_ALLOC
+#include <set>
+#include <ext/mt_allocator.h>
+using namespace __gnu_cxx;
+#endif
+
 #include <algorithm>
 #include <ctime>
 #include <iostream>
@@ -73,5 +79,8 @@ int main() {
 #endif
 #ifdef BENCH_STD
   timeOps<set<int32_t>>();
+#endif
+#ifdef BENCH_GNU_MT_ALLOC
+  timeOps<set<int32_t, less<int32_t>, __mt_alloc<int32_t>>>();
 #endif
 }
