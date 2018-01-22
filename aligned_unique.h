@@ -14,7 +14,7 @@ namespace cashew {
 template <class T>
 class free_deleter {
  public:
-  void operator()(void* p) { static_cast<T*>(p)->~T(); std::free(p); }
+  void operator()(void* p) noexcept { static_cast<T*>(p)->~T(); std::free(p); }
 };
 
 template <class T>
@@ -22,13 +22,12 @@ class free_deleter<T[]> {
   size_t n_;
  public:
   explicit free_deleter(size_t n) : n_(n) {}
-  void operator()(void* vp) {
+  void operator()(void* vp) noexcept {
     T* p = static_cast<T*>(vp);
     for(size_t i=0;i<n_;++i) p[i].~T();
     std::free(p);
   }
 };
-
 
 template <class T>
 using aligned_unique_ptr = std::unique_ptr<T, free_deleter<T>>;

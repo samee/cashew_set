@@ -1,3 +1,4 @@
+#include "aligned_unique.h"
 #include "cashew_set.h"
 #include <algorithm>
 #include <cassert>
@@ -10,7 +11,9 @@ using namespace std;
 using intSet = cashew_set<int32_t>;
 
 void testNodeAlignment() {
-  auto p = make_unique<CashewSetNode<int,CashewSetTraits<int>>[]>(10);
+  using traits_type = CashewSetTraits<int>;
+  using node_type = CashewSetNode<int,traits_type>;
+  auto p = make_aligned_unique<node_type[],traits_type::cache_line_nbytes>(10);
   assert((ptrdiff_t(p.get()) & (CashewSetTraits<int>::cache_line_nbytes-1))
       == 0);
 }

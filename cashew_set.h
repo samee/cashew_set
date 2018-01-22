@@ -1,12 +1,5 @@
-/* 19 Jan, 2018: Check how this all compares with Boost fast pool allocator.
-
-   25 Dec, 2017: Right now, we need --std=c++1z for this to compile. Clang++
-   (v4.0.1) fails without it because of constexpr, while g++ (v7.2.0) seems to
-   succeed succeeds but silently ignores dynamic memory allocation alignment
-   requirements. Actually, g++ just corrupts everything because non-trivial
-   destructors don't work well with over-aligned types.
-   We do have a runtime check for that.
-
+/* 21 Jan, 2018: We can now compile this with --std=c++11, thanks to
+   aligned_unique_ptr. This works both with g++ and clang++.
 
    Intro
    -----
@@ -81,9 +74,11 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
-//#include <functional>  // Creates a problem for clang++ v4.0.1
+#include <functional>
 #include <limits>
 #include <memory>
+
+#include "aligned_unique.h"
 
 namespace cashew {
 
@@ -111,11 +106,18 @@ struct CashewSetTraits {
 };
 
 template <class Elt, class Traits>
-struct alignas(Traits::cache_line_nbytes) CashewSetNode {
+struct CashewSetNode {
   using key_type = typename Traits::key_type;
   using elt_count_type = typename Traits::elt_count_type;
   static constexpr elt_count_type elt_count_max = Traits::elt_count_max;
-  std::unique_ptr<CashewSetNode[]> children;
+
+  // We don't directly use aligned_unique_ptr<T[]>, and instead wrap T[] in
+  //   a struct. This is because (a) {aligned_,}unique_ptr<T[n]> is not defined
+  //   for some unknown reason, and (b) T[] specializations use a bit more
+  //   memory to track array length, so they can call destructors properly.
+  struct family_type;
+  using pointer_type = aligned_unique_ptr<family_type>;
+  pointer_type children;
   elt_count_type elt_count;
   key_type elts[elt_count_max];
 
@@ -123,6 +125,11 @@ struct alignas(Traits::cache_line_nbytes) CashewSetNode {
     static_assert(sizeof(CashewSetNode) == Traits::cache_line_nbytes,
         "Tree nodes do not match cache size");
   }
+};
+
+template <class Elt, class Traits>
+struct CashewSetNode<Elt, Traits>::family_type {
+  CashewSetNode at[elt_count_max+1];
 };
 
 struct cashew_set_bug : std::logic_error {
@@ -153,6 +160,7 @@ class cashew_set {
   using depth_type = int8_t;  // One byte is *plenty*.
   using elt_count_type = typename Traits::elt_count_type;
   using node_type = CashewSetNode<Elt,Traits>;
+  using family_type = typename CashewSetNode<Elt,Traits>::family_type;
   node_type root;
   Less less;
   Eq eq;
@@ -168,7 +176,7 @@ class cashew_set {
     // Note to future self: I could have saved a few cycles in
     // insertSpacious if we were to return only one of these,
     // since family0 doesn't really change.
-    std::unique_ptr<node_type[]> family0, family1;
+    aligned_unique_ptr<family_type> family0, family1;
     InsStatus status;
   };
   TryInsertResult insertSpacious(
@@ -180,9 +188,9 @@ class cashew_set {
   TryInsertResult tryInsert(
       node_type& node,depth_type nodeDepth,
       key_type key);
-  static std::unique_ptr<node_type[]> make_family() {
-    auto rv = std::make_unique<node_type[]>(node_type::elt_count_max+1);
-    if ((ptrdiff_t(rv.get()) & (Traits::cache_line_nbytes-1)) != 0)
+  static aligned_unique_ptr<family_type> make_family() {
+    auto rv = make_aligned_unique<family_type, Traits::cache_line_nbytes>();
+    if ((ptrdiff_t(rv->at) & (Traits::cache_line_nbytes-1)) != 0)
       // This should be a warning, not an error. But right now,
       // this indicates a GCC problem that causes memory corrption.
       throw cashew_set_bug("new[] produced unaligned tree nodes. "
@@ -214,7 +222,7 @@ int cashew_set<Elt,Less,Eq,Traits>::countRecursive(
   for(elt_count_type i=0;i<node.elt_count;++i)
     if(eq(node.elts[i],key)) return 1;
     else if(less(node.elts[i],key)) lessCount++;
-  return node.children==nullptr?0:countRecursive(node.children[lessCount],key);
+  return node.children==nullptr?0:countRecursive(node.children->at[lessCount],key);
 }
 
 // Return value indicates if key was just inserted, or it had already existed.
@@ -229,13 +237,13 @@ bool cashew_set<Elt,Less,Eq,Traits>::insert(key_type key) {
   // People, we have bad news. tryInsert() has split our family.
   // Step 1) Fix pointers.
   root.children = make_family();
-  root.children[0].children=std::move(result.family0);
-  root.children[1].children=std::move(result.family1);
+  root.children->at[0].children=std::move(result.family0);
+  root.children->at[1].children=std::move(result.family1);
 
   // Step 2) Split up elts.
-  root.children[0].elt_count=splitArray(root.elts,root.elt_count,
-      root.children[0].elts,root.children[1].elts,key,less);
-  root.children[1].elt_count=root.elt_count-root.children[0].elt_count;
+  root.children->at[0].elt_count=splitArray(root.elts,root.elt_count,
+      root.children->at[0].elts,root.children->at[1].elts,key,less);
+  root.children->at[1].elt_count=root.elt_count-root.children->at[0].elt_count;
 
   // Step 3) Reset root. This is the only step that increments treeDepth.
   root.elts[0]=key; root.elt_count=1;
@@ -308,15 +316,15 @@ auto cashew_set<Elt,Less,Eq,Traits>::insertSpacious(
   if(nodeDepth<treeDepth) {
     if(node.children==nullptr) node.children = make_family();
 
-    auto result = tryInsert(node.children[lessCount],nodeDepth+1,key);
+    auto result = tryInsert(node.children->at[lessCount],nodeDepth+1,key);
     if(result.status!=InsStatus::familySplit) return result;
 
     // O(n) insert of result.family into node.children,
     // at position lessCount+1.
     const elt_count_type child_count = node.elt_count+1;
-    shiftArray(node.children.get()+lessCount+1,child_count-lessCount-1);
-    node_type &lt_node = node.children[lessCount];
-    node_type &gt_node = node.children[lessCount+1];
+    shiftArray(node.children->at+lessCount+1,child_count-lessCount-1);
+    node_type &lt_node = node.children->at[lessCount];
+    node_type &gt_node = node.children->at[lessCount+1];
     lt_node.children = std::move(result.family0);
     gt_node.children = std::move(result.family1);
 
@@ -362,17 +370,17 @@ auto cashew_set<Elt,Less,Eq,Traits>::insertFull(
   if(node.children==nullptr)
     throw cashew_set_bug("Full leaf node should only appear at leaf level");
 
-  auto result = tryInsert(node.children[lessCount],nodeDepth+1,key);
+  auto result = tryInsert(node.children->at[lessCount],nodeDepth+1,key);
   if(result.status!=InsStatus::familySplit) return result;
 
   const elt_count_type child_count = node.elt_count+1;
   auto nibling = make_family();
 
   // Let our larger children be adopted by the new sibling family.
-  move_n(node.children.get()+lessCount+1, child_count-lessCount-1,
-         nibling.get()+1);
-  node_type &lt_node=node.children[lessCount];
-  node_type &gt_node=nibling[0];
+  move_n(node.children->at+lessCount+1, child_count-lessCount-1,
+         nibling->at+1);
+  node_type &lt_node=node.children->at[lessCount];
+  node_type &gt_node=nibling->at[0];
   lt_node.children=std::move(result.family0);
   gt_node.children=std::move(result.family1);
 
