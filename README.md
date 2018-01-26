@@ -18,6 +18,16 @@ Power processors. If your machine turns out to be different, there is a simple
 `Traits` class you can inherit and override the value.
 
 
+Usage
+-----
+
+Just `#include "cashew_set.h"` and start using like a set.  You can rerun these
+microbenchmarks on your own machine by running `./cashew_set_bench.sh`. This
+will give you more usage examples as well. You may need `--std=c++11` to compile
+it, either on GCC or Clang. While I have not tested it on any other compiler,
+would be curious to know the results.
+
+
 Status
 ------
 
