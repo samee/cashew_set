@@ -7,10 +7,10 @@ elements:
 
 |               | `std::set` | `cashew_set` |
 | ------------- | ---------: | -----------: |
-| Insert asc.   |   12.6 s   |      2.4 s   |
-| Insert desc.  |   11.9 s   |      2.4 s   |
-| Insert random |   47.0 s   |     14.2 s   |
-| Search random |   54.4 s   |     14.7 s   |
+| Insert asc.   |   13.2 s   |      2.4 s   |
+| Insert desc.  |   12.4 s   |      2.4 s   |
+| Insert random |   44.8 s   |     13.6 s   |
+| Search random |   51.3 s   |     14.4 s   |
 
 It turns out that many CPUs today go with a 64-byte cache line, so this should
 provide benefits on any machine. This includes most of Intel, AMD, ARM, and IBM
