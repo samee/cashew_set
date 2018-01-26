@@ -22,7 +22,7 @@
    CashewSetTraits::elt_count_max below.
 
    Only a single pointer is stored to make room for more data elements. In
-   general, a node with node.count elements have node.elt_count+1 children,
+   general, a node with node.elt_count elements have node.elt_count+1 children,
    unless node.children==nullptr. In general, nodes can be in one of three
    states:
    
@@ -33,25 +33,28 @@
                       node.children != nullptr
 
    17th Dec. 2017: Hmm, I just allowed discontiguous data population in trees,
-   where it is possible to have a chain of nodes with no elements. Inserted
-   nodes get added to the leaf at the bottom of that chain. I don't feel too
-   good about this, but the logic is too uniform to ignore. I might regret
-   this.
+     where it is possible to have a chain of nodes with no elements. Inserted
+     nodes get added to the leaf at the bottom of that chain. I don't feel too
+     good about this, but the logic is too uniform to ignore. I might regret
+     this.
 
-   The fact that we even have nodes with no elements is a consequence of always
-   splitting nodes by the value being inserted, and not the median value.
-   Inserted values can be smaller or larger than all other values in the node.
+     The fact that we even have nodes with no elements is a consequence of
+     always splitting nodes by the value being inserted, and not the median
+     value.  Inserted values can be smaller or larger than all other values in
+     the node.
 
-   TODO obsolete doc, need to update. 15th Dec. 2017.
-   We never keep internal nodes with zero elements. The node.children pointer
-   always points to an array of SetInt32Node[setInt32ChlidrenPerNode]; Depending
-   on node.count, the last few elements of this array may be unused: we always
-   keep them zero-initialized anyway.
+   The node.children pointer always points to an array of
+   node_type[elt_count_max+1]; Depending on node.elt_count, the last few
+   elements of this array may be unused: we always keep them zero-initialized
+   anyway.
 
-   Elements in a single node are not sorted. Instead, when searching for a key
-   x, we determine which child to proceed to by counting the number of index i
-   that satisfies elt[i] < x. This is a set, not a multiset, so if x is already
-   found in a node, we do not have to proceed any farther.
+   Elements in a single node are not sorted, linear search seems good enough.
+   However, if we don't find an element at a node, we still need to figure out
+   which child to proceed to. We determine this by computing the position it
+   would have taken, had the elements in the node been sorted. So when looking
+   for an element x, we proceed to children.at[c], where c is the the number of
+   index i that satisfies elts[i] < x. This is a set, not a multiset, so if x is
+   already found in a node, we do not have to proceed any farther.
 
    This, however, means that we have to be careful when a child node gets split.
    The children have to be shifted to make room in the child array.
@@ -60,8 +63,9 @@
    Things left to consider
    -----------------------
 
-   We want a forest: consider shared_ptr or other mechanisms. Code may have to
-   be more generic than what we thought. Right now, we are using unique_ptr.
+   We might want a forest: consider shared_ptr or other mechanisms. Code may
+   have to be more generic than what we thought. Right now, we are using
+   unique_ptr.
 
    Maps will need a trailing array of values, but that needs flexibility in the
    children layout described. We may need something special for root node, to
