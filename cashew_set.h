@@ -23,14 +23,14 @@
 
    Only a single pointer is stored to make room for more data elements. In
    general, a node with node.elt_count elements have node.elt_count+1 children,
-   unless node.children==nullptr. In general, nodes can be in one of three
+   unless node.family ==nullptr. In general, nodes can be in one of three
    states:
    
-     * Empty node: node.count == 0 && node.children == nullptr
+     * Empty node: node.count == 0 && node.family == nullptr
      * Leaf node: 0 <= node.elt_count <= elt_count_max &&
-                  node.children == nullptr
+                  node.family == nullptr
      * Non-leaf node: 0 <= node.elt_count <= elt_count_max &&
-                      node.children != nullptr
+                      node.family != nullptr
 
    17th Dec. 2017: Hmm, I just allowed discontiguous data population in trees,
      where it is possible to have a chain of nodes with no elements. Inserted
@@ -43,7 +43,7 @@
      value.  Inserted values can be smaller or larger than all other values in
      the node.
 
-   The node.children pointer always points to an array of
+   The node.family pointer always points to an array of
    node_type[elt_count_max+1]; Depending on node.elt_count, the last few
    elements of this array may be unused: we always keep them zero-initialized
    anyway.
@@ -52,7 +52,7 @@
    However, if we don't find an element at a node, we still need to figure out
    which child to proceed to. We determine this by computing the position it
    would have taken, had the elements in the node been sorted. So when looking
-   for an element x, we proceed to children.at[c], where c is the the number of
+   for an element x, we proceed to family.child[c], where c is the the number of
    index i that satisfies elts[i] < x. This is a set, not a multiset, so if x is
    already found in a node, we do not have to proceed any farther.
 
@@ -121,12 +121,12 @@ struct CashewSetNode {
   //   for some unknown reason, and (b) T[] specializations use a bit more
   //   memory to track array length, so they can call destructors properly.
   struct family_type;
-  using pointer_type = aligned_unique_ptr<family_type>;
-  pointer_type children;
+  using family_pointer_type = aligned_unique_ptr<family_type>;
+  family_pointer_type family;
   elt_count_type elt_count;
   key_type elts[elt_count_max];
 
-  CashewSetNode() : children(nullptr), elt_count(0) {
+  CashewSetNode() : family(nullptr), elt_count(0) {
     static_assert(sizeof(CashewSetNode) == Traits::cache_line_nbytes,
         "Tree nodes do not match cache size");
   }
@@ -134,7 +134,7 @@ struct CashewSetNode {
 
 template <class Elt, class Traits>
 struct CashewSetNode<Elt, Traits>::family_type {
-  CashewSetNode at[elt_count_max+1];
+  CashewSetNode child[elt_count_max+1];
 };
 
 struct cashew_set_bug : std::logic_error {
@@ -154,7 +154,7 @@ class cashew_set {
   bool insert(key_type key);
   void clear() noexcept {
     root.elt_count=0;
-    root.children.reset();
+    root.family.reset();
     treeDepth = 1;
     treeEltCount = 0;
   }
@@ -195,7 +195,7 @@ class cashew_set {
       key_type key);
   static aligned_unique_ptr<family_type> make_family() {
     auto rv = make_aligned_unique<family_type, Traits::cache_line_nbytes>();
-    if ((ptrdiff_t(rv->at) & (Traits::cache_line_nbytes-1)) != 0)
+    if ((ptrdiff_t(rv->child) & (Traits::cache_line_nbytes-1)) != 0)
       // This should be a warning, not an error. But right now,
       // this indicates a GCC problem that causes memory corrption.
       throw cashew_set_bug("new[] produced unaligned tree nodes. "
@@ -227,11 +227,12 @@ int cashew_set<Elt,Less,Eq,Traits>::countRecursive(
   for(elt_count_type i=0;i<node.elt_count;++i)
     if(eq(node.elts[i],key)) return 1;
     else if(less(node.elts[i],key)) lessCount++;
-  return node.children==nullptr?0:countRecursive(node.children->at[lessCount],key);
+  return node.family==nullptr
+    ?0:countRecursive(node.family->child[lessCount],key);
 }
 
 // Return value indicates if key was just inserted, or it had already existed.
-// Note to future me: tryInsert should return nullptr parts if root.children
+// Note to future me: tryInsert should return nullptr parts if root.family
 // starts out as nullptr.
 template <class Elt, class Less, class Eq, class Traits>
 bool cashew_set<Elt,Less,Eq,Traits>::insert(key_type key) {
@@ -241,14 +242,15 @@ bool cashew_set<Elt,Less,Eq,Traits>::insert(key_type key) {
 
   // People, we have bad news. tryInsert() has split our family.
   // Step 1) Fix pointers.
-  root.children = make_family();
-  root.children->at[0].children=std::move(result.family0);
-  root.children->at[1].children=std::move(result.family1);
+  root.family = make_family();
+  root.family->child[0].family=std::move(result.family0);
+  root.family->child[1].family=std::move(result.family1);
 
   // Step 2) Split up elts.
-  root.children->at[0].elt_count=splitArray(root.elts,root.elt_count,
-      root.children->at[0].elts,root.children->at[1].elts,key,less);
-  root.children->at[1].elt_count=root.elt_count-root.children->at[0].elt_count;
+  root.family->child[0].elt_count=splitArray(root.elts,root.elt_count,
+      root.family->child[0].elts,root.family->child[1].elts,key,less);
+  root.family->child[1].elt_count=root.elt_count
+      - root.family->child[0].elt_count;
 
   // Step 3) Reset root. This is the only step that increments treeDepth.
   root.elts[0]=key; root.elt_count=1;
@@ -270,7 +272,7 @@ void cashew_set<Elt,Less,Eq,Traits>::checkBugs(const node_type& node,
     throw cashew_set_bug("Node is corrupted. Element count too large.");
   if(nodeDepth > treeDepth) 
     throw cashew_set_bug("Node is deeper than it's supposed to be.");
-  if(nodeDepth==treeDepth && node.children!=nullptr)
+  if(nodeDepth==treeDepth && node.family!=nullptr)
     throw cashew_set_bug("It's too deep for having children");
 }
 
@@ -303,7 +305,7 @@ auto cashew_set<Elt,Less,Eq,Traits>::tryInsert(
 //   nodeDepth <= treeDepth
 //   if (nodeDepth == treeDepth) {
 //     node is a leaf
-//     node.children == nullptr
+//     node.family == nullptr
 //     we don't propagate farther down.
 //   }
 //   key has no duplicate directly in node.
@@ -319,19 +321,19 @@ auto cashew_set<Elt,Less,Eq,Traits>::insertSpacious(
     elt_count_type lessCount) -> TryInsertResult {
 
   if(nodeDepth<treeDepth) {
-    if(node.children==nullptr) node.children = make_family();
+    if(node.family==nullptr) node.family = make_family();
 
-    auto result = tryInsert(node.children->at[lessCount],nodeDepth+1,key);
+    auto result = tryInsert(node.family->child[lessCount],nodeDepth+1,key);
     if(result.status!=InsStatus::familySplit) return result;
 
-    // O(n) insert of result.family into node.children,
+    // O(n) insert of result.family into node.family,
     // at position lessCount+1.
     const elt_count_type child_count = node.elt_count+1;
-    shiftArray(node.children->at+lessCount+1,child_count-lessCount-1);
-    node_type &lt_node = node.children->at[lessCount];
-    node_type &gt_node = node.children->at[lessCount+1];
-    lt_node.children = std::move(result.family0);
-    gt_node.children = std::move(result.family1);
+    shiftArray(node.family->child+lessCount+1,child_count-lessCount-1);
+    node_type &lt_node = node.family->child[lessCount];
+    node_type &gt_node = node.family->child[lessCount+1];
+    lt_node.family = std::move(result.family0);
+    gt_node.family = std::move(result.family1);
 
     // Divy up lt_node.elts.
     gt_node.elt_count = lt_node.elt_count - splitArray(
@@ -357,7 +359,7 @@ OutputIt move_n(InputIt first,Size count, OutputIt result) {
 //   nodeDepth <= treeDepth
 //   if (nodeDepth == treeDepth) {
 //     node is a leaf
-//     node.children == nullptr
+//     node.family == nullptr
 //     we don't propagate farther down.
 //   }
 //   key has no duplicate directly in node.
@@ -372,29 +374,29 @@ auto cashew_set<Elt,Less,Eq,Traits>::insertFull(
     key_type key,
     elt_count_type lessCount) -> TryInsertResult {
   if(nodeDepth==treeDepth) return {nullptr,nullptr,InsStatus::familySplit};
-  if(node.children==nullptr)
+  if(node.family==nullptr)
     throw cashew_set_bug("Full leaf node should only appear at leaf level");
 
-  auto result = tryInsert(node.children->at[lessCount],nodeDepth+1,key);
+  auto result = tryInsert(node.family->child[lessCount],nodeDepth+1,key);
   if(result.status!=InsStatus::familySplit) return result;
 
   const elt_count_type child_count = node.elt_count+1;
   auto nibling = make_family();
 
   // Let our larger children be adopted by the new sibling family.
-  move_n(node.children->at+lessCount+1, child_count-lessCount-1,
-         nibling->at+1);
-  node_type &lt_node=node.children->at[lessCount];
-  node_type &gt_node=nibling->at[0];
-  lt_node.children=std::move(result.family0);
-  gt_node.children=std::move(result.family1);
+  move_n(node.family->child+lessCount+1, child_count-lessCount-1,
+         nibling->child+1);
+  node_type &lt_node=node.family->child[lessCount];
+  node_type &gt_node=nibling->child[0];
+  lt_node.family=std::move(result.family0);
+  gt_node.family=std::move(result.family1);
 
   // Distribute node.elts
   gt_node.elt_count =
     lt_node.elt_count-splitArray(lt_node.elts,lt_node.elt_count,
         lt_node.elts,gt_node.elts,key,less);
   lt_node.elt_count-=gt_node.elt_count;
-  return {std::move(node.children),std::move(nibling),InsStatus::familySplit};
+  return {std::move(node.family),std::move(nibling),InsStatus::familySplit};
 }
 
 }  // namespace cashew
