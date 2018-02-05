@@ -116,6 +116,15 @@ struct CashewSetNode {
   using elt_count_type = typename Traits::elt_count_type;
   static constexpr elt_count_type elt_count_max = Traits::elt_count_max;
 
+  // We don't directly use aligned_unique_ptr<T[]>, and instead wrap T[] in
+  //   a struct. This is because (a) {aligned_,}unique_ptr<T[n]> is not defined
+  //   for some unknown reason, and (b) T[] specializations use a bit more
+  //   memory to track array length, so they can call destructors properly.
+  struct family_type;
+  using family_pointer_type = aligned_unique_ptr<family_type>;
+  family_pointer_type family;
+  elt_count_type elt_count;
+
   // Keep elements as char arrays so we don't require default-constructability.
   // We should really have declared it simply, without requiring these getters:
   //   Elt elts[elt_count_max];
@@ -126,14 +135,6 @@ struct CashewSetNode {
   }
   Elt* elts() { return reinterpret_cast<Elt*>(elt_buf); }
 
-  // We don't directly use aligned_unique_ptr<T[]>, and instead wrap T[] in
-  //   a struct. This is because (a) {aligned_,}unique_ptr<T[n]> is not defined
-  //   for some unknown reason, and (b) T[] specializations use a bit more
-  //   memory to track array length, so they can call destructors properly.
-  struct family_type;
-  using family_pointer_type = aligned_unique_ptr<family_type>;
-  family_pointer_type family;
-  elt_count_type elt_count;
 
   CashewSetNode() : family(nullptr), elt_count(0) {
     static_assert(sizeof(CashewSetNode) == Traits::cache_line_nbytes,
