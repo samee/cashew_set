@@ -55,7 +55,27 @@ void testRandomInserts() {
   assert(s.count(200000)==0);
 }
 
+struct IntNoDefaultCtor {
+  int32_t x;
+  IntNoDefaultCtor() = delete;
+  explicit IntNoDefaultCtor(int32_t x) : x(x) {}
+};
+bool operator<(const IntNoDefaultCtor& a,const IntNoDefaultCtor& b) {
+  return a.x<b.x;
+}
+bool operator==(const IntNoDefaultCtor& a,const IntNoDefaultCtor& b) {
+  return a.x==b.x;
+}
+// This test checks compile-time properties.
+void testNoDefaultConstructor() {
+  cashew_set<IntNoDefaultCtor> s;
+  s.insert(IntNoDefaultCtor(4));
+  assert(s.count(IntNoDefaultCtor(4))==1);
+  assert(s.count(IntNoDefaultCtor(5))==0);
+}
+
 int main() {
   testNodeAlignment();
   testSmallInserts();
+  testNoDefaultConstructor();
 }

@@ -53,7 +53,7 @@
    which child to proceed to. We determine this by computing the position it
    would have taken, had the elements in the node been sorted. So when looking
    for an element x, we proceed to family.child[c], where c is the the number of
-   index i that satisfies elts[i] < x. This is a set, not a multiset, so if x is
+   index i that satisfies elt(i) < x. This is a set, not a multiset, so if x is
    already found in a node, we do not have to proceed any farther.
 
    This, however, means that we have to be careful when a child node gets split.
@@ -116,6 +116,16 @@ struct CashewSetNode {
   using elt_count_type = typename Traits::elt_count_type;
   static constexpr elt_count_type elt_count_max = Traits::elt_count_max;
 
+  // Keep elements as char arrays so we don't require default-constructability.
+  // We should really have declared it simply, without requiring these getters:
+  //   Elt elts[elt_count_max];
+  alignas(Elt) char elt_buf[elt_count_max*sizeof(Elt)];
+  Elt& elt(size_t i) { return reinterpret_cast<Elt*>(elt_buf)[i]; }
+  const Elt& elt(size_t i) const {
+    return reinterpret_cast<const Elt*>(elt_buf)[i];
+  }
+  Elt* elts() { return reinterpret_cast<Elt*>(elt_buf); }
+
   // We don't directly use aligned_unique_ptr<T[]>, and instead wrap T[] in
   //   a struct. This is because (a) {aligned_,}unique_ptr<T[n]> is not defined
   //   for some unknown reason, and (b) T[] specializations use a bit more
@@ -124,7 +134,6 @@ struct CashewSetNode {
   using family_pointer_type = aligned_unique_ptr<family_type>;
   family_pointer_type family;
   elt_count_type elt_count;
-  key_type elts[elt_count_max];
 
   CashewSetNode() : family(nullptr), elt_count(0) {
     static_assert(sizeof(CashewSetNode) == Traits::cache_line_nbytes,
@@ -204,18 +213,29 @@ class cashew_set {
   }
 };
 
+// Move with manual object lifetime-management.
+// Assumes a to be uninitialized memory for X.
+template <class X> void uninitialized_move(X& a, X& b) {
+  if (&a == &b) return;
+  new (&a) X(std::move(b));
+  b.~X();
+}
+
 // Splits up src into two arrays, dest_lt and dest_ge, depending on whether the
 // element is less than or greater or equal to pivot.
-// It is okay if src==dest_lt or src==dest_eq, but assumes dest_lt and dest_ge
-// don't overlap. Also assumes no partial overlap: either full alias, or no
-// overlap with src. Assumes both dest_lt and dest_ge has enough space.
-template<class X, class Len, class Less>
-Len splitArray(const X src[],Len len,X dest_lt[],
+// It may be called as:
+//   splitArray(src,src_len,dest_lt,dest_gt,p,less);
+//   splitArray(src,src_len,    src,dest_gt,p,less);
+//   splitArray(src,src_len,dest_lt,    src,p,less);
+// No other form of pointer aliasing is supported, for instance, partial overlaps.
+// Assumes both dest_lt and dest_ge has enough space.
+template <class X, class Len, class Less>
+Len splitArray(X src[],Len len,X dest_lt[],
                X dest_ge[],X pivot,Less less) {
   Len i, ltCount=0;
   for(i=0;i<len;++i)
-    if(less(src[i],pivot)) dest_lt[ltCount++]=src[i];
-    else dest_ge[i-ltCount]=src[i];
+    if(less(src[i],pivot)) uninitialized_move(dest_lt[ltCount++],src[i]);
+    else uninitialized_move(dest_ge[i-ltCount],src[i]);
   return ltCount;
 }
 
@@ -225,8 +245,8 @@ int cashew_set<Elt,Less,Eq,Traits>::countRecursive(
     const node_type& node, key_type key) const {
   elt_count_type lessCount = 0;
   for(elt_count_type i=0;i<node.elt_count;++i)
-    if(eq(node.elts[i],key)) return 1;
-    else if(less(node.elts[i],key)) lessCount++;
+    if(eq(node.elt(i),key)) return 1;
+    else if(less(node.elt(i),key)) lessCount++;
   return node.family==nullptr
     ?0:countRecursive(node.family->child[lessCount],key);
 }
@@ -247,13 +267,14 @@ bool cashew_set<Elt,Less,Eq,Traits>::insert(key_type key) {
   root.family->child[1].family=std::move(result.family1);
 
   // Step 2) Split up elts.
-  root.family->child[0].elt_count=splitArray(root.elts,root.elt_count,
-      root.family->child[0].elts,root.family->child[1].elts,key,less);
+  root.family->child[0].elt_count=splitArray(root.elts(),root.elt_count,
+      root.family->child[0].elts(),root.family->child[1].elts(),key,less);
   root.family->child[1].elt_count=root.elt_count
       - root.family->child[0].elt_count;
 
   // Step 3) Reset root. This is the only step that increments treeDepth.
-  root.elts[0]=key; root.elt_count=1;
+  new (&root.elt(0)) Elt(key);
+  root.elt_count=1;
   treeDepth++;
   treeEltCount++;
   return true;
@@ -289,8 +310,8 @@ auto cashew_set<Elt,Less,Eq,Traits>::tryInsert(
 
   elt_count_type lessCount = 0;
   for(elt_count_type i=0;i<node.elt_count;++i)
-    if(eq(node.elts[i],key)) return {nullptr,nullptr,InsStatus::duplicateFound};
-    else if(less(node.elts[i],key)) lessCount++;
+    if(eq(node.elt(i),key)) return {nullptr,nullptr,InsStatus::duplicateFound};
+    else if(less(node.elt(i),key)) lessCount++;
 
   if(node.elt_count < node.elt_count_max)
     // There is no way this node will have to split.
@@ -337,12 +358,13 @@ auto cashew_set<Elt,Less,Eq,Traits>::insertSpacious(
 
     // Divy up lt_node.elts.
     gt_node.elt_count = lt_node.elt_count - splitArray(
-        lt_node.elts,lt_node.elt_count,lt_node.elts,gt_node.elts,key,less);
+        lt_node.elts(),lt_node.elt_count,
+        lt_node.elts(),gt_node.elts(),key,less);
     lt_node.elt_count-=gt_node.elt_count;
   }
 
   // Append key to node.elts.
-  node.elts[node.elt_count++]=key;
+  new (&node.elt(node.elt_count++)) Elt(key);
   treeEltCount++;
   return {nullptr,nullptr,InsStatus::done};
 }
@@ -393,8 +415,8 @@ auto cashew_set<Elt,Less,Eq,Traits>::insertFull(
 
   // Distribute node.elts
   gt_node.elt_count =
-    lt_node.elt_count-splitArray(lt_node.elts,lt_node.elt_count,
-        lt_node.elts,gt_node.elts,key,less);
+    lt_node.elt_count-splitArray(lt_node.elts(),lt_node.elt_count,
+        lt_node.elts(),gt_node.elts(),key,less);
   lt_node.elt_count-=gt_node.elt_count;
   return {std::move(node.family),std::move(nibling),InsStatus::familySplit};
 }
