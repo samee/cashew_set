@@ -135,11 +135,14 @@ struct CashewSetNode {
   }
   Elt* elts() { return reinterpret_cast<Elt*>(elt_buf); }
 
-
   CashewSetNode() : family(nullptr), elt_count(0) {
     static_assert(sizeof(CashewSetNode) == Traits::cache_line_nbytes,
         "Tree nodes do not match cache size");
   }
+  ~CashewSetNode() {
+    for(elt_count_type i=0;i<elt_count;++i) elt(i).~Elt();
+  }
+  CashewSetNode& operator=(CashewSetNode&&) = default;
 };
 
 template <class Elt, class Traits>

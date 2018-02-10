@@ -18,25 +18,25 @@ void testNodeAlignment() {
       == 0);
 }
 
-void testSmallInserts() {
-  intSet s;
+template <class X> void testSmallInserts() {
+  cashew_set<X> s;
   // Check if it's empty.
   assert(s.empty());
-  assert(s.count(1)==0);
+  assert(s.count(X(1))==0);
 
   // Start running.
   for(int i=1;i<=100;++i) {
-    assert(s.insert(i));
+    assert(s.insert(X(i)));
     assert(!s.empty());
-    assert(s.count(i)==1);
-    assert(s.count(i+1)==0);
+    assert(s.count(X(i))==1);
+    assert(s.count(X(i+1))==0);
     assert(s.size()==i);
   }
 
   // Insert duplicates.
-  assert(!s.insert(1));
-  assert(!s.insert(10));
-  assert(!s.insert(100));
+  assert(!s.insert(X(1)));
+  assert(!s.insert(X(10)));
+  assert(!s.insert(X(100)));
 }
 
 void testRandomInserts() {
@@ -74,8 +74,35 @@ void testNoDefaultConstructor() {
   assert(s.count(IntNoDefaultCtor(5))==0);
 }
 
+struct IntLifeCount {
+  static int born;
+  static int died;
+  int32_t x;
+  IntLifeCount() = delete;
+  IntLifeCount(const IntLifeCount& that) : x(that.x) { born++;}
+  IntLifeCount(IntLifeCount&& that) : x(that.x) { born++; }
+  explicit IntLifeCount(int32_t x) : x(x) { born++; }
+  ~IntLifeCount() { died++; }
+};
+int IntLifeCount::born = 0;
+int IntLifeCount::died = 0;
+bool operator<(const IntLifeCount& a,const IntLifeCount& b) {
+  return a.x<b.x;
+}
+bool operator==(const IntLifeCount& a,const IntLifeCount& b) {
+  return a.x==b.x;
+}
+// Test if custom types get destructors invoked.
+void testDtorInvocation() {
+  assert(IntLifeCount::born == 0);
+  assert(IntLifeCount::died == 0);
+  testSmallInserts<IntLifeCount>();
+  assert(IntLifeCount::born == IntLifeCount::died);
+}
+
 int main() {
   testNodeAlignment();
-  testSmallInserts();
+  testSmallInserts<uint32_t>();
   testNoDefaultConstructor();
+  testDtorInvocation();
 }
