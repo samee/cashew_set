@@ -265,7 +265,7 @@ class cashew_set {
   int countRecursive(const node_type& node, key_type key) const;
 
   // Insert method helpers.
-  enum class InsStatus {done, duplicateFound, familySplit};
+  enum class InsStatus : char {done, duplicateFound, familySplit};
   struct TryInsertResult {
     // Note to future self: I could have saved a few cycles in
     // insertSpacious if we were to return only one of these,
