@@ -25,6 +25,11 @@ template <class X> int smallInsertCount() {
   return x>100?x:100;
 }
 
+// We don't have too many distinct values here.
+template <> int smallInsertCount<uint8_t>() {
+  return 100;
+}
+
 template <class X> void testSmallInserts() {
   int ic = smallInsertCount<X>();
   cashew_set<X> s;
@@ -128,7 +133,10 @@ void testDtorInvocation() {
 
 int main() {
   testNodeAlignment();
+  testSmallInserts<uint8_t>();
+  testSmallInserts<uint16_t>();
   testSmallInserts<uint32_t>();
+  testSmallInserts<uint64_t>();
   testNoDefaultConstructor();
   testDtorInvocation();
 }
