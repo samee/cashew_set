@@ -82,6 +82,7 @@
 #include <functional>
 #include <limits>
 #include <memory>
+#include <type_traits>
 
 #include "aligned_unique.h"
 
@@ -109,6 +110,24 @@ struct CashewSetTraits {
     elt_count_type(elt_count_max_size_t);
   static constexpr elt_count_type children_per_node = elt_count_max+1;
 };
+
+template <class X> void placement_move(X& a,X& b) {
+  new (&a) X(std::move(b));
+}
+
+// No-op if st>=en. Like new Type[], on exception it destroys the elements
+// that were created successfully.
+template <class X, class IntType>
+void placement_move_range(X* dest, X* src, IntType st, IntType en) {
+  IntType i;
+  try {
+    for(i=st;i<en;++i) placement_move(dest[i],src[i]);
+  } catch(...) {
+    for(IntType j=st;j<i;++j) dest[i].~X();
+    throw;
+  }
+}
+
 
 // Stores a vector of keys as elts(), and a unique_ptr to an array of other
 // node objects.
@@ -144,13 +163,18 @@ class CashewSetNode {
   CashewSetNode() : family(nullptr), elt_count_(0) {
     static_assert(sizeof(CashewSetNode) == Traits::cache_line_nbytes,
         "Tree nodes do not match cache size");
+    // This requirement simplifies exception safety.
+    static_assert(std::is_trivial<elt_count_type>::value,
+        "Internal type elt_count_type must be trivial");
   }
+  CashewSetNode(const CashewSetNode&) = delete;
   ~CashewSetNode() {
     for(elt_count_type i=0;i<elt_count_;++i) elt(i).~Elt();
   }
+  CashewSetNode& operator=(const CashewSetNode&) = delete;
   CashewSetNode& operator=(CashewSetNode&& that);
 
-  void clear() {
+  void clear() noexcept {
     for(elt_count_type i=0;i<elt_count_;++i) elt(i).~Elt();
     elt_count_=0;
     family.reset();
@@ -182,16 +206,12 @@ CashewSetNode<Elt,Traits>::operator=(CashewSetNode<Elt,Traits>&& that) {
   elt_count_type i;
   elt_count_type min_count=std::min(this->elt_count_,that.elt_count_);
   for(i=0;i<min_count;++i) this->elt(i)=std::move(that.elt(i));
-  for(;i<that.elt_count_;++i) new (&this->elt(i)) Elt(std::move(that.elt(i)));
+  placement_move_range(this->elts(),that.elts(),min_count,that.elt_count_);
   for(;i<this->elt_count_;++i) this->elt(i).~Elt();
   this->elt_count_=that.elt_count_;
   this->family=std::move(that.family);
   that.clear();
   return *this;
-}
-
-template <class X> void placement_move(X& a,X& b) {
-  new (&a) X(std::move(b));
 }
 
 template <class Elt, class Traits>
