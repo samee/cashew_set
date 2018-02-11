@@ -172,6 +172,7 @@ class CashewSetNode {
     for(elt_count_type i=0;i<elt_count_;++i) elt(i).~Elt();
   }
   CashewSetNode& operator=(const CashewSetNode&) = delete;
+  // Provides basic exception safety: nothing leaks.
   CashewSetNode& operator=(CashewSetNode&& that);
 
   void clear() noexcept {
@@ -183,6 +184,8 @@ class CashewSetNode {
   // and the rest going right. Assumes no elt is equal to p, and no pointer is
   // aliased. Leaves *this with no elements. Unlike splitEltsInto, this method
   // also assumes left and right start with elt_count==0.
+  // Provides basic exception safety: all elts() get cleared from all three
+  // nodes. Nothing is leaked.
   template <class Less>
     void splitElts(CashewSetNode& left,CashewSetNode& right,Elt p,Less less);
   // Split elts() between *this and that, with elts smaller than p remaining
@@ -220,14 +223,27 @@ void CashewSetNode<Elt,Traits>::splitElts(
     CashewSetNode<Elt,Traits>& left, CashewSetNode<Elt,Traits>& right,
     Elt p, Less less) {
   elt_count_type i,j=0;
-  for(i=0;i<this->elt_count_;++i) {
-    if(less(this->elt(i),p)) placement_move(left.elt(i-j),this->elt(i));
-    else placement_move(right.elt(j++),this->elt(i));
-    this->elt(i).~Elt();
+  try {
+    for(i=0;i<this->elt_count_;++i) {
+      if(less(this->elt(i),p)) placement_move(left.elt(i-j),this->elt(i));
+      else {
+        placement_move(right.elt(j),this->elt(i));
+        j++;
+      }
+      this->elt(i).~Elt();
+    }
+    left.elt_count_=i-j;
+    right.elt_count_=j;
+    this->elt_count_=0;
+  }catch(...) {
+    // Clear everything.
+    elt_count_type k=0;
+    for(k=0;k<i-j;++k) left.elt(k).~Elt();
+    for(k=0;k<j;++k) right.elt(k).~Elt();
+    for(k=i;k<this->elt_count_;++k) this->elt(i).~Elt();
+    left.elt_count_=right.elt_count_=this->elt_count_=0;
+    throw;
   }
-  left.elt_count_=i-j;
-  right.elt_count_=j;
-  this->elt_count_=0;
 }
 
 template <class Elt, class Traits>
