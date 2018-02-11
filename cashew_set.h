@@ -160,6 +160,8 @@ struct CashewSetNode {
   // Does not touch family, which should be rearranged as well.
   template <class Less>
     void splitEltsInto(CashewSetNode& that, Elt p, Less less);
+  // Does not touch family, whish should be rearranged as well.
+  void addElt(Elt key) { new (&elt(elt_count)) Elt(key); elt_count++; }
 };
 
 template <class Elt, class Traits>
@@ -314,8 +316,7 @@ bool cashew_set<Elt,Less,Eq,Traits>::insert(key_type key) {
   root.splitElts(root.family->child[0],root.family->child[1],key,less);
 
   // Step 3) Reset root. This is the only step that increments treeDepth.
-  new (&root.elt(0)) Elt(key);
-  root.elt_count=1;
+  root.addElt(key);
   treeDepth++;
   treeEltCount++;
   return true;
@@ -400,7 +401,7 @@ auto cashew_set<Elt,Less,Eq,Traits>::insertSpacious(
   }
 
   // Append key to node.elts.
-  new (&node.elt(node.elt_count++)) Elt(key);
+  node.addElt(key);
   treeEltCount++;
   return {nullptr,nullptr,InsStatus::done};
 }
