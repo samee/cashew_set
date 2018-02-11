@@ -149,6 +149,12 @@ struct CashewSetNode {
     elt_count=0;
     family.reset();
   }
+  // Split elts() between left and right, with elts smaller than p going left,
+  // and the rest going right. Assumes no elt is equal to p, and no pointer is
+  // aliased. Leaves *this with no elements. Unlike splitEltsInto, this method
+  // also assumes left and right start with elt_count==0.
+  template <class Less>
+    void splitElts(CashewSetNode& left,CashewSetNode& right,Elt p,Less less);
   // Split elts() between *this and that, with elts smaller than p remaining
   // in *this. Assumes no elt is exactly equal to p.
   // Does not touch family, which should be rearranged as well.
@@ -176,6 +182,26 @@ CashewSetNode<Elt,Traits>::operator=(CashewSetNode<Elt,Traits>&& that) {
   return *this;
 }
 
+template <class X> void placement_move(X& a,X& b) {
+  new (&a) X(std::move(b));
+}
+
+template <class Elt, class Traits>
+template <class Less>
+void CashewSetNode<Elt,Traits>::splitElts(
+    CashewSetNode<Elt,Traits>& left, CashewSetNode<Elt,Traits>& right,
+    Elt p, Less less) {
+  elt_count_type i,j=0;
+  for(i=0;i<this->elt_count;++i) {
+    if(less(this->elt(i),p)) placement_move(left.elt(i-j),this->elt(i));
+    else placement_move(right.elt(j++),this->elt(i));
+    this->elt(i).~Elt();
+  }
+  left.elt_count=i-j;
+  right.elt_count=j;
+  this->elt_count=0;
+}
+
 template <class Elt, class Traits>
 template <class Less>
 void CashewSetNode<Elt,Traits>::splitEltsInto(
@@ -184,7 +210,7 @@ void CashewSetNode<Elt,Traits>::splitEltsInto(
   for(i=0;i<this->elt_count;++i)
     if(less(this->elt(i),p)) this->elt(i-j)=std::move(this->elt(i));
     else if(j<that.elt_count) that.elt(j++)=std::move(this->elt(i)); 
-    else new (&that.elt(j++)) Elt(std::move(this->elt(i)));
+    else placement_move(that.elt(j++), this->elt(i));
   new_that_count=j;
   new_this_count=elt_count-j;
   for(;j<that.elt_count;++j) that.elt(j).~Elt();
@@ -259,32 +285,6 @@ class cashew_set {
   }
 };
 
-// Move with manual object lifetime-management.
-// Assumes a to be uninitialized memory for X.
-template <class X> void uninitialized_move(X& a, X& b) {
-  if (&a == &b) return;
-  new (&a) X(std::move(b));
-  b.~X();
-}
-
-// Splits up src into two arrays, dest_lt and dest_ge, depending on whether the
-// element is less than or greater or equal to pivot.
-// It may be called as:
-//   splitArray(src,src_len,dest_lt,dest_gt,p,less);
-//   splitArray(src,src_len,    src,dest_gt,p,less);
-//   splitArray(src,src_len,dest_lt,    src,p,less);
-// No other form of pointer aliasing is supported, for instance, partial overlaps.
-// Assumes both dest_lt and dest_ge has enough space.
-template <class X, class Len, class Less>
-Len splitArray(X src[],Len len,X dest_lt[],
-               X dest_ge[],X pivot,Less less) {
-  Len i, ltCount=0;
-  for(i=0;i<len;++i)
-    if(less(src[i],pivot)) uninitialized_move(dest_lt[ltCount++],src[i]);
-    else uninitialized_move(dest_ge[i-ltCount],src[i]);
-  return ltCount;
-}
-
 // Returns 0 or 1.
 template <class Elt, class Less, class Eq, class Traits>
 int cashew_set<Elt,Less,Eq,Traits>::countRecursive(
@@ -311,12 +311,7 @@ bool cashew_set<Elt,Less,Eq,Traits>::insert(key_type key) {
   root.family = make_family();
   root.family->child[0].family=std::move(result.family0);
   root.family->child[1].family=std::move(result.family1);
-
-  // Step 2) Split up elts.
-  root.family->child[0].elt_count=splitArray(root.elts(),root.elt_count,
-      root.family->child[0].elts(),root.family->child[1].elts(),key,less);
-  root.family->child[1].elt_count=root.elt_count
-      - root.family->child[0].elt_count;
+  root.splitElts(root.family->child[0],root.family->child[1],key,less);
 
   // Step 3) Reset root. This is the only step that increments treeDepth.
   new (&root.elt(0)) Elt(key);
