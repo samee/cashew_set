@@ -98,6 +98,12 @@ void testDtorInvocation() {
   assert(IntLifeCount::died == 0);
   testSmallInserts<IntLifeCount>();
   assert(IntLifeCount::born == IntLifeCount::died);
+  {
+    cashew_set<IntLifeCount> s;
+    s.insert(IntLifeCount(5));
+    s.clear();
+  }
+  assert(IntLifeCount::born == IntLifeCount::died);
 }
 
 int main() {

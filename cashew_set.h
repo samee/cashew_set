@@ -143,6 +143,12 @@ struct CashewSetNode {
     for(elt_count_type i=0;i<elt_count;++i) elt(i).~Elt();
   }
   CashewSetNode& operator=(CashewSetNode&&) = default;
+
+  void clear() {
+    for(elt_count_type i=0;i<elt_count;++i) elt(i).~Elt();
+    elt_count=0;
+    family.reset();
+  }
 };
 
 template <class Elt, class Traits>
@@ -166,8 +172,7 @@ class cashew_set {
   using size_type = size_t;
   bool insert(key_type key);
   void clear() noexcept {
-    root.elt_count=0;
-    root.family.reset();
+    root.clear();
     treeDepth = 1;
     treeEltCount = 0;
   }
