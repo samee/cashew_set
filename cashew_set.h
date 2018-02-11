@@ -22,14 +22,14 @@
    CashewSetTraits::elt_count_max below.
 
    Only a single pointer is stored to make room for more data elements. In
-   general, a node with node.elt_count elements have node.elt_count+1 children,
-   unless node.family ==nullptr. In general, nodes can be in one of three
-   states:
+   general, a node with node.elt_count() elements have node.elt_count()+1
+   children, unless node.family==nullptr. In general, nodes can be in one of
+   three states:
    
      * Empty node: node.count == 0 && node.family == nullptr
-     * Leaf node: 0 <= node.elt_count <= elt_count_max &&
+     * Leaf node: 0 <= node.elt_count() <= elt_count_max &&
                   node.family == nullptr
-     * Non-leaf node: 0 <= node.elt_count <= elt_count_max &&
+     * Non-leaf node: 0 <= node.elt_count() <= elt_count_max &&
                       node.family != nullptr
 
    17th Dec. 2017: Hmm, I just allowed discontiguous data population in trees,
@@ -44,7 +44,7 @@
      the node.
 
    The node.family pointer always points to an array of
-   node_type[elt_count_max+1]; Depending on node.elt_count, the last few
+   node_type[elt_count_max+1]; Depending on node.elt_count(), the last few
    elements of this array may be unused: we always keep them zero-initialized
    anyway.
 
@@ -110,8 +110,11 @@ struct CashewSetTraits {
   static constexpr elt_count_type children_per_node = elt_count_max+1;
 };
 
+// Stores a vector of keys as elts(), and a unique_ptr to an array of other
+// node objects.
 template <class Elt, class Traits>
-struct CashewSetNode {
+class CashewSetNode {
+ public:
   using key_type = typename Traits::key_type;
   using elt_count_type = typename Traits::elt_count_type;
   static constexpr elt_count_type elt_count_max = Traits::elt_count_max;
@@ -123,30 +126,33 @@ struct CashewSetNode {
   struct family_type;
   using family_pointer_type = aligned_unique_ptr<family_type>;
   family_pointer_type family;
-  elt_count_type elt_count;
+  elt_count_type elt_count() const { return elt_count_; }
+ private:
+  elt_count_type elt_count_;
 
   // Keep elements as char arrays so we don't require default-constructability.
   // We should really have declared it simply, without requiring these getters:
   //   Elt elts[elt_count_max];
-  alignas(Elt) char elt_buf[elt_count_max*sizeof(Elt)];
-  Elt& elt(size_t i) { return reinterpret_cast<Elt*>(elt_buf)[i]; }
+  alignas(Elt) char elt_buf_[elt_count_max*sizeof(Elt)];
+ public:
+  Elt& elt(size_t i) { return reinterpret_cast<Elt*>(elt_buf_)[i]; }
   const Elt& elt(size_t i) const {
-    return reinterpret_cast<const Elt*>(elt_buf)[i];
+    return reinterpret_cast<const Elt*>(elt_buf_)[i];
   }
-  Elt* elts() { return reinterpret_cast<Elt*>(elt_buf); }
+  Elt* elts() { return reinterpret_cast<Elt*>(elt_buf_); }
 
-  CashewSetNode() : family(nullptr), elt_count(0) {
+  CashewSetNode() : family(nullptr), elt_count_(0) {
     static_assert(sizeof(CashewSetNode) == Traits::cache_line_nbytes,
         "Tree nodes do not match cache size");
   }
   ~CashewSetNode() {
-    for(elt_count_type i=0;i<elt_count;++i) elt(i).~Elt();
+    for(elt_count_type i=0;i<elt_count_;++i) elt(i).~Elt();
   }
   CashewSetNode& operator=(CashewSetNode&& that);
 
   void clear() {
-    for(elt_count_type i=0;i<elt_count;++i) elt(i).~Elt();
-    elt_count=0;
+    for(elt_count_type i=0;i<elt_count_;++i) elt(i).~Elt();
+    elt_count_=0;
     family.reset();
   }
   // Split elts() between left and right, with elts smaller than p going left,
@@ -161,7 +167,7 @@ struct CashewSetNode {
   template <class Less>
     void splitEltsInto(CashewSetNode& that, Elt p, Less less);
   // Does not touch family, whish should be rearranged as well.
-  void addElt(Elt key) { new (&elt(elt_count)) Elt(key); elt_count++; }
+  void addElt(Elt key) { new (&elt(elt_count_)) Elt(key); elt_count_++; }
 };
 
 template <class Elt, class Traits>
@@ -174,11 +180,11 @@ CashewSetNode<Elt,Traits>&
 CashewSetNode<Elt,Traits>::operator=(CashewSetNode<Elt,Traits>&& that) {
   if (this==&that) return *this;
   elt_count_type i;
-  elt_count_type min_count=std::min(this->elt_count,that.elt_count);
+  elt_count_type min_count=std::min(this->elt_count_,that.elt_count_);
   for(i=0;i<min_count;++i) this->elt(i)=std::move(that.elt(i));
-  for(;i<that.elt_count;++i) new (&this->elt(i)) Elt(std::move(that.elt(i)));
-  for(;i<this->elt_count;++i) this->elt(i).~Elt();
-  this->elt_count=that.elt_count;
+  for(;i<that.elt_count_;++i) new (&this->elt(i)) Elt(std::move(that.elt(i)));
+  for(;i<this->elt_count_;++i) this->elt(i).~Elt();
+  this->elt_count_=that.elt_count_;
   this->family=std::move(that.family);
   that.clear();
   return *this;
@@ -194,14 +200,14 @@ void CashewSetNode<Elt,Traits>::splitElts(
     CashewSetNode<Elt,Traits>& left, CashewSetNode<Elt,Traits>& right,
     Elt p, Less less) {
   elt_count_type i,j=0;
-  for(i=0;i<this->elt_count;++i) {
+  for(i=0;i<this->elt_count_;++i) {
     if(less(this->elt(i),p)) placement_move(left.elt(i-j),this->elt(i));
     else placement_move(right.elt(j++),this->elt(i));
     this->elt(i).~Elt();
   }
-  left.elt_count=i-j;
-  right.elt_count=j;
-  this->elt_count=0;
+  left.elt_count_=i-j;
+  right.elt_count_=j;
+  this->elt_count_=0;
 }
 
 template <class Elt, class Traits>
@@ -209,16 +215,16 @@ template <class Less>
 void CashewSetNode<Elt,Traits>::splitEltsInto(
     CashewSetNode<Elt,Traits>& that, Elt p, Less less) {
   elt_count_type i,j=0,new_that_count,new_this_count;
-  for(i=0;i<this->elt_count;++i)
+  for(i=0;i<this->elt_count_;++i)
     if(less(this->elt(i),p)) this->elt(i-j)=std::move(this->elt(i));
-    else if(j<that.elt_count) that.elt(j++)=std::move(this->elt(i)); 
+    else if(j<that.elt_count_) that.elt(j++)=std::move(this->elt(i)); 
     else placement_move(that.elt(j++), this->elt(i));
   new_that_count=j;
-  new_this_count=elt_count-j;
-  for(;j<that.elt_count;++j) that.elt(j).~Elt();
-  for(i=new_this_count;i<this->elt_count;++i) this->elt(i).~Elt();
-  this->elt_count=new_this_count;
-  that.elt_count=new_that_count;
+  new_this_count=this->elt_count_-j;
+  for(;j<that.elt_count_;++j) that.elt(j).~Elt();
+  for(i=new_this_count;i<this->elt_count_;++i) this->elt(i).~Elt();
+  this->elt_count_=new_this_count;
+  that.elt_count_=new_that_count;
 }
 
 struct cashew_set_bug : std::logic_error {
@@ -292,7 +298,7 @@ template <class Elt, class Less, class Eq, class Traits>
 int cashew_set<Elt,Less,Eq,Traits>::countRecursive(
     const node_type& node, key_type key) const {
   elt_count_type lessCount = 0;
-  for(elt_count_type i=0;i<node.elt_count;++i)
+  for(elt_count_type i=0;i<node.elt_count();++i)
     if(eq(node.elt(i),key)) return 1;
     else if(less(node.elt(i),key)) lessCount++;
   return node.family==nullptr
@@ -331,7 +337,7 @@ template<class X> void shiftArray(X* arr,size_t len) {
 template <class Elt, class Less, class Eq, class Traits>
 void cashew_set<Elt,Less,Eq,Traits>::checkBugs(const node_type& node,
     depth_type nodeDepth) const {
-  if(node.elt_count > node.elt_count_max)
+  if(node.elt_count() > node.elt_count_max)
     throw cashew_set_bug("Node is corrupted. Element count too large.");
   if(nodeDepth > treeDepth) 
     throw cashew_set_bug("Node is deeper than it's supposed to be.");
@@ -351,20 +357,20 @@ auto cashew_set<Elt,Less,Eq,Traits>::tryInsert(
   checkBugs(node,nodeDepth);
 
   elt_count_type lessCount = 0;
-  for(elt_count_type i=0;i<node.elt_count;++i)
+  for(elt_count_type i=0;i<node.elt_count();++i)
     if(eq(node.elt(i),key)) return {nullptr,nullptr,InsStatus::duplicateFound};
     else if(less(node.elt(i),key)) lessCount++;
 
-  if(node.elt_count < node.elt_count_max)
+  if(node.elt_count() < node.elt_count_max)
     // There is no way this node will have to split.
     return insertSpacious(node,nodeDepth,key,lessCount);
   else
-    // node.elt_count == node.elt_count_max, so we may have to split.
+    // node.elt_count() == node.elt_count_max, so we may have to split.
     return insertFull(node,nodeDepth,key,lessCount);
 }
 
 // Assumes without checking:
-//   node.elt_count < node.elt_count_max
+//   node.elt_count() < node.elt_count_max
 //   nodeDepth <= treeDepth
 //   if (nodeDepth == treeDepth) {
 //     node is a leaf
@@ -372,9 +378,9 @@ auto cashew_set<Elt,Less,Eq,Traits>::tryInsert(
 //     we don't propagate farther down.
 //   }
 //   key has no duplicate directly in node.
-//   lessCount == count_if(node.elts, node.elts+node.elt_count,
+//   lessCount == count_if(node.elts, node.elts+node.elt_count(),
 //                         bind(less,_1,key))
-//     which also implies 0 <= lessCount <= node.elt_count
+//     which also implies 0 <= lessCount <= node.elt_count()
 // Inserts key in subtree under node. Never returns familySplit.
 template <class Elt, class Less, class Eq, class Traits>
 auto cashew_set<Elt,Less,Eq,Traits>::insertSpacious(
@@ -391,7 +397,7 @@ auto cashew_set<Elt,Less,Eq,Traits>::insertSpacious(
 
     // O(n) insert of result.family into node.family,
     // at position lessCount+1.
-    const elt_count_type child_count = node.elt_count+1;
+    const elt_count_type child_count = node.elt_count()+1;
     shiftArray(node.family->child+lessCount+1,child_count-lessCount-1);
     node_type &lt_node = node.family->child[lessCount];
     node_type &gt_node = node.family->child[lessCount+1];
@@ -414,7 +420,7 @@ OutputIt move_n(InputIt first,Size count, OutputIt result) {
 }
 
 // Assumes without checking:
-//   node.elt_count == node.elt_count_max
+//   node.elt_count() == node.elt_count_max
 //   nodeDepth <= treeDepth
 //   if (nodeDepth == treeDepth) {
 //     node is a leaf
@@ -422,9 +428,9 @@ OutputIt move_n(InputIt first,Size count, OutputIt result) {
 //     we don't propagate farther down.
 //   }
 //   key has no duplicate directly in node.
-//   lessCount == count_if(node.elts, node.elts+node.elt_count,
+//   lessCount == count_if(node.elts, node.elts+node.elt_count(),
 //                         bind(less,_1,key))
-//     which also implies 0 <= lessCount <= node.elt_count
+//     which also implies 0 <= lessCount <= node.elt_count()
 // Inserts key in subtree under node. Propagates any familySplit.
 template <class Elt, class Less, class Eq, class Traits>
 auto cashew_set<Elt,Less,Eq,Traits>::insertFull(
@@ -439,7 +445,7 @@ auto cashew_set<Elt,Less,Eq,Traits>::insertFull(
   auto result = tryInsert(node.family->child[lessCount],nodeDepth+1,key);
   if(result.status!=InsStatus::familySplit) return result;
 
-  const elt_count_type child_count = node.elt_count+1;
+  const elt_count_type child_count = node.elt_count()+1;
   auto nibling = make_family();
 
   // Let our larger children be adopted by the new sibling family.
