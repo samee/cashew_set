@@ -142,7 +142,18 @@ struct CashewSetNode {
   ~CashewSetNode() {
     for(elt_count_type i=0;i<elt_count;++i) elt(i).~Elt();
   }
-  CashewSetNode& operator=(CashewSetNode&&) = default;
+  CashewSetNode& operator=(CashewSetNode&& that) {
+    if (this==&that) return *this;
+    elt_count_type i;
+    elt_count_type min_count=std::min(this->elt_count,that.elt_count);
+    for(i=0;i<min_count;++i) this->elt(i)=std::move(that.elt(i));
+    for(;i<that.elt_count;++i) new (&this->elt(i)) Elt(std::move(that.elt(i)));
+    for(;i<this->elt_count;++i) this->elt(i).~Elt();
+    this->elt_count=that.elt_count;
+    this->family=std::move(that.family);
+    that.clear();
+    return *this;
+  }
 
   void clear() {
     for(elt_count_type i=0;i<elt_count;++i) elt(i).~Elt();
