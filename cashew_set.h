@@ -142,30 +142,56 @@ struct CashewSetNode {
   ~CashewSetNode() {
     for(elt_count_type i=0;i<elt_count;++i) elt(i).~Elt();
   }
-  CashewSetNode& operator=(CashewSetNode&& that) {
-    if (this==&that) return *this;
-    elt_count_type i;
-    elt_count_type min_count=std::min(this->elt_count,that.elt_count);
-    for(i=0;i<min_count;++i) this->elt(i)=std::move(that.elt(i));
-    for(;i<that.elt_count;++i) new (&this->elt(i)) Elt(std::move(that.elt(i)));
-    for(;i<this->elt_count;++i) this->elt(i).~Elt();
-    this->elt_count=that.elt_count;
-    this->family=std::move(that.family);
-    that.clear();
-    return *this;
-  }
+  CashewSetNode& operator=(CashewSetNode&& that);
 
   void clear() {
     for(elt_count_type i=0;i<elt_count;++i) elt(i).~Elt();
     elt_count=0;
     family.reset();
   }
+  // Split elts() between *this and that, with elts smaller than p remaining
+  // in *this. Assumes no elt is exactly equal to p.
+  // Does not touch family, which should be rearranged as well.
+  template <class Less>
+    void splitEltsInto(CashewSetNode& that, Elt p, Less less);
 };
 
 template <class Elt, class Traits>
 struct CashewSetNode<Elt, Traits>::family_type {
   CashewSetNode child[elt_count_max+1];
 };
+
+template <class Elt, class Traits>
+CashewSetNode<Elt,Traits>&
+CashewSetNode<Elt,Traits>::operator=(CashewSetNode<Elt,Traits>&& that) {
+  if (this==&that) return *this;
+  elt_count_type i;
+  elt_count_type min_count=std::min(this->elt_count,that.elt_count);
+  for(i=0;i<min_count;++i) this->elt(i)=std::move(that.elt(i));
+  for(;i<that.elt_count;++i) new (&this->elt(i)) Elt(std::move(that.elt(i)));
+  for(;i<this->elt_count;++i) this->elt(i).~Elt();
+  this->elt_count=that.elt_count;
+  this->family=std::move(that.family);
+  that.clear();
+  return *this;
+}
+
+template <class Elt, class Traits>
+template <class Less>
+void CashewSetNode<Elt,Traits>::splitEltsInto(
+    CashewSetNode<Elt,Traits>& that, Elt p, Less less) {
+  elt_count_type i,j=0,new_that_count,new_this_count;
+  for(i=0;i<this->elt_count;++i)
+    if(less(this->elt(i),p)) this->elt(i-j)=std::move(this->elt(i));
+    else if(j<that.elt_count) that.elt(j++)=std::move(this->elt(i)); 
+    else new (&that.elt(j++)) Elt(std::move(this->elt(i)));
+  new_that_count=j;
+  new_this_count=elt_count-j;
+  for(;j<that.elt_count;++j) that.elt(j).~Elt();
+  for(i=new_this_count;i<this->elt_count;++i) this->elt(i).~Elt();
+  this->elt_count=new_this_count;
+  that.elt_count=new_that_count;
+}
 
 struct cashew_set_bug : std::logic_error {
   explicit cashew_set_bug(const char* what) : std::logic_error(what) {}
@@ -375,12 +401,7 @@ auto cashew_set<Elt,Less,Eq,Traits>::insertSpacious(
     node_type &gt_node = node.family->child[lessCount+1];
     lt_node.family = std::move(result.family0);
     gt_node.family = std::move(result.family1);
-
-    // Divy up lt_node.elts.
-    gt_node.elt_count = lt_node.elt_count - splitArray(
-        lt_node.elts(),lt_node.elt_count,
-        lt_node.elts(),gt_node.elts(),key,less);
-    lt_node.elt_count-=gt_node.elt_count;
+    lt_node.splitEltsInto(gt_node,key,less);
   }
 
   // Append key to node.elts.
@@ -432,12 +453,7 @@ auto cashew_set<Elt,Less,Eq,Traits>::insertFull(
   node_type &gt_node=nibling->child[0];
   lt_node.family=std::move(result.family0);
   gt_node.family=std::move(result.family1);
-
-  // Distribute node.elts
-  gt_node.elt_count =
-    lt_node.elt_count-splitArray(lt_node.elts(),lt_node.elt_count,
-        lt_node.elts(),gt_node.elts(),key,less);
-  lt_node.elt_count-=gt_node.elt_count;
+  lt_node.splitEltsInto(gt_node,key,less);
   return {std::move(node.family),std::move(nibling),InsStatus::familySplit};
 }
 
