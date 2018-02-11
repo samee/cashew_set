@@ -315,13 +315,13 @@ bool cashew_set<Elt,Less,Eq,Traits>::insert(key_type key) {
     return result.status != InsStatus::duplicateFound;
 
   // People, we have bad news. tryInsert() has split our family.
-  // Step 1) Fix pointers.
+  // Step 1) Split up root into children.
   root.family = make_family();
   root.family->child[0].family=std::move(result.family0);
   root.family->child[1].family=std::move(result.family1);
   root.splitElts(root.family->child[0],root.family->child[1],key,less);
 
-  // Step 3) Reset root. This is the only step that increments treeDepth.
+  // Step 2) Reset root. This is the only step that increments treeDepth.
   root.addElt(key);
   treeDepth++;
   treeEltCount++;
