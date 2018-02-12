@@ -31,9 +31,8 @@ would be curious to know the results.
 Status
 ------
 
-Just to be clear, this implementation is still very much a proof-of-concept, so
+Just to be clear, this implementation is still very rough, so
 use at your own risk. For example, it only does insert and lookup, no delete.
-Behavior around non-POD types and exception safety still needs to be worked out.
 While I'll keep on working on it in my own free time, I'm uploading it in case
 somebody finds it useful. Feel free to play around with it. If you have
 questions, just use the issue tracker for now so everyone can see the answers.
