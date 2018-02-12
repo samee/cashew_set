@@ -147,6 +147,8 @@ class CashewSetNode {
   family_pointer_type family;
   elt_count_type elt_count() const { return elt_count_; }
  private:
+  // Indicates that elt([0..elt_count_)] are valid objects. For lifecycle
+  // management, it indicates how many destructors calls we are responsible for.
   elt_count_type elt_count_;
 
   // Keep elements as char arrays so we don't require default-constructability.
@@ -184,13 +186,13 @@ class CashewSetNode {
   // and the rest going right. Assumes no elt is equal to p, and no pointer is
   // aliased. Leaves *this with no elements. Unlike splitEltsInto, this method
   // also assumes left and right start with elt_count==0.
-  // Provides basic exception safety: all elts() get cleared from all three
-  // nodes. Nothing is leaked.
+  // Provides basic exception safety: nothing is leaked.
   template <class Less>
     void splitElts(CashewSetNode& left,CashewSetNode& right,Elt p,Less less);
   // Split elts() between *this and that, with elts smaller than p remaining
   // in *this. Assumes no elt is exactly equal to p.
   // Does not touch family, which should be rearranged as well.
+  // Provides basic exception safety: nothing is leaked.
   template <class Less>
     void splitEltsInto(CashewSetNode& that, Elt p, Less less);
   // Does not touch family, whish should be rearranged as well.
@@ -226,24 +228,17 @@ void CashewSetNode<Elt,Traits>::splitElts(
   try {
     for(i=0;i<this->elt_count_;++i) {
       if(less(this->elt(i),p)) placement_move(left.elt(i-j),this->elt(i));
-      else {
-        placement_move(right.elt(j),this->elt(i));
-        j++;
-      }
-      this->elt(i).~Elt();
+      else { placement_move(right.elt(j),this->elt(i)); j++; }
     }
+  }catch(...) {
     left.elt_count_=i-j;
     right.elt_count_=j;
-    this->elt_count_=0;
-  }catch(...) {
-    // Clear everything.
-    elt_count_type k=0;
-    for(k=0;k<i-j;++k) left.elt(k).~Elt();
-    for(k=0;k<j;++k) right.elt(k).~Elt();
-    for(k=i;k<this->elt_count_;++k) this->elt(i).~Elt();
-    left.elt_count_=right.elt_count_=this->elt_count_=0;
     throw;
   }
+  left.elt_count_=i-j;
+  right.elt_count_=j;
+  for(i=0;i<this->elt_count_;++i) this->elt(i).~Elt();
+  this->elt_count_=0;
 }
 
 template <class Elt, class Traits>
@@ -251,10 +246,18 @@ template <class Less>
 void CashewSetNode<Elt,Traits>::splitEltsInto(
     CashewSetNode<Elt,Traits>& that, Elt p, Less less) {
   elt_count_type i,j=0,new_that_count,new_this_count;
-  for(i=0;i<this->elt_count_;++i)
-    if(less(this->elt(i),p)) this->elt(i-j)=std::move(this->elt(i));
-    else if(j<that.elt_count_) that.elt(j++)=std::move(this->elt(i)); 
-    else placement_move(that.elt(j++), this->elt(i));
+  try {
+    for(i=0;i<this->elt_count_;++i)
+      if(less(this->elt(i),p)) this->elt(i-j)=std::move(this->elt(i));
+      else if(j<that.elt_count_) that.elt(j++)=std::move(this->elt(i)); 
+      else {
+        placement_move(that.elt(j), this->elt(i));
+        j++;
+      }
+  }catch(...) {
+    if(that.elt_count_<j) that.elt_count_=j;
+    throw;
+  }
   new_that_count=j;
   new_this_count=this->elt_count_-j;
   for(;j<that.elt_count_;++j) that.elt(j).~Elt();
