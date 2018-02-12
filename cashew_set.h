@@ -345,26 +345,33 @@ int cashew_set<Elt,Less,Eq,Traits>::countRecursive(
 }
 
 // Return value indicates if key was just inserted, or it had already existed.
+// Provides basic exception safety: clears out the entire tree at the first
+// sign of trouble. Nothing is leaked.
 // Note to future me: tryInsert should return nullptr parts if root.family
 // starts out as nullptr.
 template <class Elt, class Less, class Eq, class Traits>
 bool cashew_set<Elt,Less,Eq,Traits>::insert(key_type key) {
-  auto result=tryInsert(root,1,key);  // 1 == depth of root node.
-  if(result.status != InsStatus::familySplit)
-    return result.status != InsStatus::duplicateFound;
+  try {
+    auto result=tryInsert(root,1,key);  // 1 == depth of root node.
+    if(result.status != InsStatus::familySplit)
+      return result.status != InsStatus::duplicateFound;
 
-  // People, we have bad news. tryInsert() has split our family.
-  // Step 1) Split up root into children.
-  root.family = make_family();
-  root.family->child[0].family=std::move(result.family0);
-  root.family->child[1].family=std::move(result.family1);
-  root.splitElts(root.family->child[0],root.family->child[1],key,less);
+    // People, we have bad news. tryInsert() has split our family.
+    // Step 1) Split up root into children.
+    root.family = make_family();
+    root.family->child[0].family=std::move(result.family0);
+    root.family->child[1].family=std::move(result.family1);
+    root.splitElts(root.family->child[0],root.family->child[1],key,less);
 
-  // Step 2) Reset root. This is the only step that increments treeDepth.
-  root.addElt(key);
-  treeDepth++;
-  treeEltCount++;
-  return true;
+    // Step 2) Reset root. This is the only step that increments treeDepth.
+    root.addElt(key);
+    treeDepth++;
+    treeEltCount++;
+    return true;
+  }catch(...) {
+    clear();
+    throw;
+  }
 }
 
 // Move arr[0..len-1] to arr[1..len]. Assumes arr[] can actually hold len+1
