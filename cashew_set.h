@@ -82,6 +82,7 @@
 #include <functional>
 #include <limits>
 #include <memory>
+#include <type_traits>
 
 #include "aligned_unique.h"
 
@@ -110,6 +111,24 @@ struct CashewSetTraits {
   static constexpr elt_count_type children_per_node = elt_count_max+1;
 };
 
+template <class X> void placement_move(X& a,X& b) {
+  new (&a) X(std::move(b));
+}
+
+// No-op if st>=en. Like new Type[], on exception it destroys the elements
+// that were created successfully.
+template <class X, class IntType>
+void placement_move_range(X* dest, X* src, IntType st, IntType en) {
+  IntType i;
+  try {
+    for(i=st;i<en;++i) placement_move(dest[i],src[i]);
+  } catch(...) {
+    for(IntType j=st;j<i;++j) dest[i].~X();
+    throw;
+  }
+}
+
+
 // Stores a vector of keys as elts(), and a unique_ptr to an array of other
 // node objects.
 template <class Elt, class Traits>
@@ -128,6 +147,8 @@ class CashewSetNode {
   family_pointer_type family;
   elt_count_type elt_count() const { return elt_count_; }
  private:
+  // Indicates that elt([0..elt_count_)] are valid objects. For lifecycle
+  // management, it indicates how many destructors calls we are responsible for.
   elt_count_type elt_count_;
 
   // Keep elements as char arrays so we don't require default-constructability.
@@ -144,13 +165,19 @@ class CashewSetNode {
   CashewSetNode() : family(nullptr), elt_count_(0) {
     static_assert(sizeof(CashewSetNode) == Traits::cache_line_nbytes,
         "Tree nodes do not match cache size");
+    // This requirement simplifies exception safety.
+    static_assert(std::is_trivial<elt_count_type>::value,
+        "Internal type elt_count_type must be trivial");
   }
+  CashewSetNode(const CashewSetNode&) = delete;
   ~CashewSetNode() {
     for(elt_count_type i=0;i<elt_count_;++i) elt(i).~Elt();
   }
+  CashewSetNode& operator=(const CashewSetNode&) = delete;
+  // Provides basic exception safety: nothing leaks.
   CashewSetNode& operator=(CashewSetNode&& that);
 
-  void clear() {
+  void clear() noexcept {
     for(elt_count_type i=0;i<elt_count_;++i) elt(i).~Elt();
     elt_count_=0;
     family.reset();
@@ -159,11 +186,13 @@ class CashewSetNode {
   // and the rest going right. Assumes no elt is equal to p, and no pointer is
   // aliased. Leaves *this with no elements. Unlike splitEltsInto, this method
   // also assumes left and right start with elt_count==0.
+  // Provides basic exception safety: nothing is leaked.
   template <class Less>
     void splitElts(CashewSetNode& left,CashewSetNode& right,Elt p,Less less);
   // Split elts() between *this and that, with elts smaller than p remaining
   // in *this. Assumes no elt is exactly equal to p.
   // Does not touch family, which should be rearranged as well.
+  // Provides basic exception safety: nothing is leaked.
   template <class Less>
     void splitEltsInto(CashewSetNode& that, Elt p, Less less);
   // Does not touch family, whish should be rearranged as well.
@@ -182,16 +211,12 @@ CashewSetNode<Elt,Traits>::operator=(CashewSetNode<Elt,Traits>&& that) {
   elt_count_type i;
   elt_count_type min_count=std::min(this->elt_count_,that.elt_count_);
   for(i=0;i<min_count;++i) this->elt(i)=std::move(that.elt(i));
-  for(;i<that.elt_count_;++i) new (&this->elt(i)) Elt(std::move(that.elt(i)));
+  placement_move_range(this->elts(),that.elts(),min_count,that.elt_count_);
   for(;i<this->elt_count_;++i) this->elt(i).~Elt();
   this->elt_count_=that.elt_count_;
   this->family=std::move(that.family);
   that.clear();
   return *this;
-}
-
-template <class X> void placement_move(X& a,X& b) {
-  new (&a) X(std::move(b));
 }
 
 template <class Elt, class Traits>
@@ -200,13 +225,19 @@ void CashewSetNode<Elt,Traits>::splitElts(
     CashewSetNode<Elt,Traits>& left, CashewSetNode<Elt,Traits>& right,
     Elt p, Less less) {
   elt_count_type i,j=0;
-  for(i=0;i<this->elt_count_;++i) {
-    if(less(this->elt(i),p)) placement_move(left.elt(i-j),this->elt(i));
-    else placement_move(right.elt(j++),this->elt(i));
-    this->elt(i).~Elt();
+  try {
+    for(i=0;i<this->elt_count_;++i) {
+      if(less(this->elt(i),p)) placement_move(left.elt(i-j),this->elt(i));
+      else { placement_move(right.elt(j),this->elt(i)); j++; }
+    }
+  }catch(...) {
+    left.elt_count_=i-j;
+    right.elt_count_=j;
+    throw;
   }
   left.elt_count_=i-j;
   right.elt_count_=j;
+  for(i=0;i<this->elt_count_;++i) this->elt(i).~Elt();
   this->elt_count_=0;
 }
 
@@ -215,10 +246,18 @@ template <class Less>
 void CashewSetNode<Elt,Traits>::splitEltsInto(
     CashewSetNode<Elt,Traits>& that, Elt p, Less less) {
   elt_count_type i,j=0,new_that_count,new_this_count;
-  for(i=0;i<this->elt_count_;++i)
-    if(less(this->elt(i),p)) this->elt(i-j)=std::move(this->elt(i));
-    else if(j<that.elt_count_) that.elt(j++)=std::move(this->elt(i)); 
-    else placement_move(that.elt(j++), this->elt(i));
+  try {
+    for(i=0;i<this->elt_count_;++i)
+      if(less(this->elt(i),p)) this->elt(i-j)=std::move(this->elt(i));
+      else if(j<that.elt_count_) that.elt(j++)=std::move(this->elt(i)); 
+      else {
+        placement_move(that.elt(j), this->elt(i));
+        j++;
+      }
+  }catch(...) {
+    if(that.elt_count_<j) that.elt_count_=j;
+    throw;
+  }
   new_that_count=j;
   new_this_count=this->elt_count_-j;
   for(;j<that.elt_count_;++j) that.elt(j).~Elt();
@@ -306,26 +345,33 @@ int cashew_set<Elt,Less,Eq,Traits>::countRecursive(
 }
 
 // Return value indicates if key was just inserted, or it had already existed.
+// Provides basic exception safety: clears out the entire tree at the first
+// sign of trouble. Nothing is leaked.
 // Note to future me: tryInsert should return nullptr parts if root.family
 // starts out as nullptr.
 template <class Elt, class Less, class Eq, class Traits>
 bool cashew_set<Elt,Less,Eq,Traits>::insert(key_type key) {
-  auto result=tryInsert(root,1,key);  // 1 == depth of root node.
-  if(result.status != InsStatus::familySplit)
-    return result.status != InsStatus::duplicateFound;
+  try {
+    auto result=tryInsert(root,1,key);  // 1 == depth of root node.
+    if(result.status != InsStatus::familySplit)
+      return result.status != InsStatus::duplicateFound;
 
-  // People, we have bad news. tryInsert() has split our family.
-  // Step 1) Split up root into children.
-  root.family = make_family();
-  root.family->child[0].family=std::move(result.family0);
-  root.family->child[1].family=std::move(result.family1);
-  root.splitElts(root.family->child[0],root.family->child[1],key,less);
+    // People, we have bad news. tryInsert() has split our family.
+    // Step 1) Split up root into children.
+    root.family = make_family();
+    root.family->child[0].family=std::move(result.family0);
+    root.family->child[1].family=std::move(result.family1);
+    root.splitElts(root.family->child[0],root.family->child[1],key,less);
 
-  // Step 2) Reset root. This is the only step that increments treeDepth.
-  root.addElt(key);
-  treeDepth++;
-  treeEltCount++;
-  return true;
+    // Step 2) Reset root. This is the only step that increments treeDepth.
+    root.addElt(key);
+    treeDepth++;
+    treeEltCount++;
+    return true;
+  }catch(...) {
+    clear();
+    throw;
+  }
 }
 
 // Move arr[0..len-1] to arr[1..len]. Assumes arr[] can actually hold len+1
